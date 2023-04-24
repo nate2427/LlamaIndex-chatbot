@@ -7,3 +7,4 @@ dist/
 *.log
 venv/
 *.json
+env

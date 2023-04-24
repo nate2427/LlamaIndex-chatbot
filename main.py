@@ -1,3 +1,5 @@
+import os
+import datetime
 from langchain import OpenAI
 from llama_index import (
     download_loader,
@@ -5,7 +7,6 @@ from llama_index import (
     ServiceContext,
     LLMPredictor,
     PromptHelper,
-    QuestionAnswerPrompt,
     ComposableGraph,
     GPTListIndex,
 )
@@ -13,7 +14,6 @@ from llama_index.langchain_helpers.agents import (
     LlamaToolkit,
     create_llama_chat_agent,
     IndexToolConfig,
-    LlamaIndexTool,
     GraphToolConfig,
 )
 from llama_index.indices.query.query_transform.base import DecomposeQueryTransform
@@ -24,31 +24,31 @@ from langchain.chat_models import ChatOpenAI
 from langchain.callbacks.base import CallbackManager
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 
-from contextlib import contextmanager, redirect_stdout
-from io import StringIO
-import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
 # from streamlit import cache_resource
-import os
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-PubMedReader = download_loader("PubmedReader")
-loader = PubMedReader()
+YoutubeTranscriptReader = download_loader("YoutubeTranscriptReader")
+
+loader = YoutubeTranscriptReader()
 
 
-search_queries = ["fitness supplement"]
+search_queries = ["AI Youtube Video", "Nate", "Nate's YouTube Video"]
 
 chat_chain = None
 initialized = False
 
+OpenAI(openai_api_key=OPENAI_API_KEY)
+
 
 def define_toolkit(indexes: List[GPTSimpleVectorIndex]):
-    summaries = [f"pubmed index {i}" for i in range(len(indexes))]
+    summaries = [f"Nate Knowledge index {i}" for i in range(len(indexes))]
     llm_predictor = LLMPredictor(
-        llm=OpenAI(temperature=0, max_tokens=1000, openai_api_key=OPENAI_API_KEY)
+        llm=OpenAI(temperature=0, max_tokens=1000,
+                   openai_api_key=OPENAI_API_KEY)
     )
 
     service_context = ServiceContext.from_defaults(llm_predictor=llm_predictor)
@@ -61,11 +61,11 @@ def define_toolkit(indexes: List[GPTSimpleVectorIndex]):
     )
 
     # [optional] save to disk
-    graph.save_to_disk("pubmed_graph_v3.json")
+    graph.save_to_disk("street_coder_nate_persona_from_youtube_graph.json")
 
     decompose_transform = DecomposeQueryTransform(llm_predictor, verbose=True)
     graph = ComposableGraph.load_from_disk(
-        "pubmed_graph_v3.json", service_context=service_context
+        "street_coder_nate_persona_from_youtube_graph.json", service_context=service_context
     )
     # define query configs for graph
     query_configs = [
@@ -88,7 +88,7 @@ def define_toolkit(indexes: List[GPTSimpleVectorIndex]):
     graph_config = GraphToolConfig(
         graph=graph,
         name=f"Graph",
-        description="useful for when you want to answer queries about supplement research from pubmed",
+        description="useful for answering questions about Nate or youtube.",
         query_configs=query_configs,
         tool_kwargs={"return_direct": True},
     )
@@ -96,14 +96,15 @@ def define_toolkit(indexes: List[GPTSimpleVectorIndex]):
     for index in indexes:
         tool_config = IndexToolConfig(
             index=index,
-            description=f"useful for when you want to answer queries about supplements and fitness.",
+            description=f"useful for when you want to answer questions about Nate or youtube",
             tool_kwargs={"return_direct": True},
             index_query_kwargs={"similarity_top_k": 3},
-            name=f"pubmed_index_v3",
+            name=f"street_coder_nate_persona_index.json",
         )
         index_configs.append(tool_config)
 
-    tool_kit = LlamaToolkit(index_configs=index_configs, graph_configs=[graph_config])
+    tool_kit = LlamaToolkit(index_configs=index_configs,
+                            graph_configs=[graph_config])
     return tool_kit
 
 
@@ -120,6 +121,7 @@ def set_up_llama_chatbot_agent(indexes, memory):
         verbose=True,
     )
     toolkit = define_toolkit(indexes)
+    print("toolkit loaded!")
     llama_chat_agent_chain = create_llama_chat_agent(
         toolkit=toolkit, memory=memory, llm=llm, verbose=True
     )
@@ -128,8 +130,8 @@ def set_up_llama_chatbot_agent(indexes, memory):
     return chat_chain, memory
 
 
-def load_papers_from_pubmed():
-    documents = loader.load_data(search_query="fitness supplements", max_results=10)
+def load_videos_from_youtube(youtube_video_urls, dir="./personas"):
+    documents = loader.load_data(ytlinks=youtube_video_urls)
     llm_predictor = LLMPredictor(
         llm=ChatOpenAI(
             openai_api_key=OPENAI_API_KEY, temperature=0, model_name="text-ada-002"
@@ -148,59 +150,36 @@ def load_papers_from_pubmed():
         llm_predictor=llm_predictor, prompt_helper=prompt_helper
     )
 
+    # create file name with current timestamp
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    file_name = f"persona_index_{current_time}.json"
+    file_path = os.path.join(dir, file_name)
+    # this essentially allows for many bots to be created/updated because the bot is built from a dir of json file configs
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+
     index = GPTSimpleVectorIndex.from_documents(
         documents, service_context=service_context
     )
-    index.save_to_disk("pubmed_index_v3.json")
-    print("saved!")
+    # save index to disk with the new file name
+    index.save_to_disk(file_path)
     return "docs are loaded! ask awaaaaay!"
 
 
-def chat(query):
-    return chat_chain.run(input=query)
+def chat(chain, query):
+    return chain.run(input=query)
 
 
-@contextmanager
-def st_capture(output_func):
-    with StringIO() as stdout, redirect_stdout(stdout):
-        old_write = stdout.write
+def initialize_chatbot(dir="./personas"):
+    memory = ConversationBufferMemory(
+        memory_key="chat_history", return_messages=False)
+    persona_indexes = []
+    for file_name in os.listdir(dir):
+        if file_name.endswith(".json"):
+            persona_index = GPTSimpleVectorIndex.load_from_disk(
+                os.path.join(dir, file_name)
+            )
+            persona_indexes.append(persona_index)
+    chat_chain, memory = set_up_llama_chatbot_agent(persona_indexes, memory)
 
-        def new_write(string):
-            ret = old_write(string)
-            output_func(stdout.getvalue())
-            return ret
-
-        stdout.write = new_write
-        yield
-
-
-@st.cache_resource()
-def initialize_chatbot():
-    memory = ConversationBufferMemory(memory_key="chat_history")
-    chat_chain, memory = set_up_llama_chatbot_agent(
-        [GPTSimpleVectorIndex.load_from_disk("pubmed_index_v3.json")], memory
-    )
     return chat_chain, memory
-
-
-chat_chain, memory = initialize_chatbot()
-
-print("memory", memory)
-
-st.header("jim AI")
-st.subheader(
-    "a chatbot for fitness enthusiasts. Ask jim about fitness supplements, nutrition, and more!"
-)
-user_query = st.text_input("Ask jim")
-
-output = st.empty()
-
-if st.button("ask"):
-    # with st_capture(output.write):
-    #     chat(user_query)
-    st.write(chat(user_query))
-
-
-if st.button("load"):
-    load_papers_from_pubmed()
-    st.markdown("docs are loaded! ask awaaaaay!")

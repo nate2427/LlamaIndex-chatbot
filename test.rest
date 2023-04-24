@@ -1,0 +1,10 @@
+POST http://127.0.0.1:5000/chat HTTP/1.1
+content-type: application/json
+
+{
+    "query": "is this what they call the singularity? Does Nate believe in it?"
+}
+
+###
+GET http://127.0.0.1:5000/history HTTP/1.1
+
