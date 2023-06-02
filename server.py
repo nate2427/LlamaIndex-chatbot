@@ -1,7 +1,9 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from main import initialize_chatbot, chat, load_videos_from_youtube
 
 app = Flask(__name__)
+CORS(app)
 app.config["chat_chain"] = None
 
 
@@ -22,7 +24,7 @@ def init_app():
 def handle_chat():
     chat_chain = app.config["chat_chain"]
     # Handle chat request here
-    return chat(chat_chain, request.json["query"])
+    return jsonify({"msg": chat(chat_chain, request.json["query"])})
 
 
 @app.route("/history", methods=["GET"])
